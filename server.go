@@ -316,6 +316,7 @@ func (h *WebsocketHTTPBridgeHandler) onConnect(originReq *http.Request, ws *webs
 		writeCloseFrame(ws, websocket.CloseInternalServerErr, "failed to generate connection id")
 		return "", err
 	}
+	h.logger.Debug("generate connection id", "connection_id", connectionID, "remote_addr", ws.RemoteAddr().String())
 	req, err := h.newBridgeRequest(
 		originReq.Context(),
 		connectionID,
@@ -353,15 +354,16 @@ func (h *WebsocketHTTPBridgeHandler) onConnect(originReq *http.Request, ws *webs
 		MessageDirection: "IN",
 	}
 	req = req.WithContext(contextWithRequestContext(req.Context(), proxyCtx))
-	respWriter := &ResponseWriter{
-		header: make(http.Header),
-	}
+	h.logger.Debug("prepare connect bridge request", "connection_id", connectionID, "remote_addr", ws.RemoteAddr().String())
+	respWriter := NewResponseWriter()
 	h.Handler.ServeHTTP(respWriter, req)
 	if respWriter.statusCode != http.StatusOK {
+		h.logger.Debug("failed bridge handler", "status", respWriter.statusCode)
 		writeCloseFrame(ws, websocket.CloseInternalServerErr, "failed bridge handler")
 		return "", err
 	}
 	h.addToConnectionList(connectionID, now, originReq, ws)
+	h.logger.Debug("connected", "connection_id", connectionID)
 	if h.verbose {
 		h.logger.Info("connected",
 			"connection_id", connectionID,
@@ -374,12 +376,19 @@ func (h *WebsocketHTTPBridgeHandler) onConnect(originReq *http.Request, ws *webs
 }
 
 func (h *WebsocketHTTPBridgeHandler) onDisonnect(connectionID string) {
-	defer h.removeFromConnectionList(connectionID, websocket.CloseNormalClosure, "Connection Closed Normally")
+	h.removeFromConnectionList(connectionID, websocket.CloseNormalClosure, "Connection Closed Normally")
 	requsetID, err := generateID(11)
 	if err != nil {
 		requsetID = "00000000="
 	}
 	connectedAt, _, originReq := h.popConnectionInfo(connectionID)
+	if originReq == nil {
+		h.logger.Warn("connection info not found", "connection_id", connectionID)
+		originReq = &http.Request{
+			RemoteAddr: "unknown",
+			Host:       "unknown",
+		}
+	}
 	proxyCtx := events.APIGatewayWebsocketProxyRequestContext{
 		ConnectionID:      connectionID,
 		RequestID:         requsetID,
@@ -414,9 +423,7 @@ func (h *WebsocketHTTPBridgeHandler) onDisonnect(connectionID string) {
 	req.Header.Set(HTTPHeaderRequestID, requsetID)
 	req.Header.Set(HTTPHeaderEventType, "DISCONNECT")
 	req.Header.Set(HTTPHeaderRouteKey, "$disconnect")
-	respWriter := &ResponseWriter{
-		header: make(http.Header),
-	}
+	respWriter := NewResponseWriter()
 	h.Handler.ServeHTTP(respWriter, req)
 	if respWriter.statusCode != http.StatusOK {
 		h.logger.ErrorContext(ctx, "failed bridge handler", "status", respWriter.statusCode)
@@ -486,21 +493,17 @@ func (h *WebsocketHTTPBridgeHandler) onReceiveMessage(connectionID string, ws *w
 	req.Header.Set(HTTPHeaderRequestID, requsetID)
 	req.Header.Set(HTTPHeaderEventType, "MESSAGE")
 	req.Header.Set(HTTPHeaderRouteKey, routeKey)
-	respWriter := &ResponseWriter{
-		header: make(http.Header),
-	}
+	respWriter := NewResponseWriter()
 	h.Handler.ServeHTTP(respWriter, req)
-	if respWriter.Len() > 0 {
-		var messageType int
-		if isBinary(respWriter.header) {
-			messageType = websocket.BinaryMessage
-		} else {
-			messageType = websocket.TextMessage
-		}
-		if err := ws.WriteMessage(messageType, respWriter.Bytes()); err != nil {
-			h.removeFromConnectionList(connectionID, websocket.CloseInternalServerErr, "failed to send message")
-			return err
-		}
+	var messageType int
+	if isBinary(respWriter.header) {
+		messageType = websocket.BinaryMessage
+	} else {
+		messageType = websocket.TextMessage
+	}
+	if err := ws.WriteMessage(messageType, respWriter.Bytes()); err != nil {
+		h.removeFromConnectionList(connectionID, websocket.CloseInternalServerErr, "failed to send message")
+		return err
 	}
 	if respWriter.statusCode != http.StatusOK {
 		h.removeFromConnectionList(connectionID, websocket.CloseInternalServerErr, "failed bridge handler")

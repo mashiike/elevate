@@ -34,6 +34,13 @@ type ResponseWriter struct {
 	statusCode int
 }
 
+func NewResponseWriter() *ResponseWriter {
+	return &ResponseWriter{
+		header:     make(http.Header),
+		statusCode: http.StatusOK,
+	}
+}
+
 func (w *ResponseWriter) Header() http.Header {
 	return w.header
 }

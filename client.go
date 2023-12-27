@@ -84,7 +84,7 @@ func GetConnection(ctx context.Context, connectionID string) (*apigatewaymanagem
 
 // ConnectionIsGone returns true if err is GoneException.
 func ConnectionIsGone(err error) bool {
-	var apiErr *smithy.GenericAPIError
+	var apiErr smithy.APIError
 	if !errors.As(err, &apiErr) {
 		return false
 	}

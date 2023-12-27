@@ -2,70 +2,96 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/apigatewaymanagementapi"
 	"github.com/mashiike/elevate"
 )
 
+var connections map[string]string = make(map[string]string)
+
+func handler(w http.ResponseWriter, req *http.Request) {
+	connectionID := elevate.ConnectionID(req)
+	switch elevate.RouteKey(req) {
+	case "$connect":
+		broadcast(req.Context(), []byte("Join member: "+connectionID))
+		connections[connectionID] = "no name:" + connectionID
+		slog.Info("join member", "connectionID", connectionID, "remoteAddr", req.RemoteAddr, "current", len(connections))
+	case "$disconnect":
+		name, ok := connections[connectionID]
+		if !ok {
+			return
+		}
+		delete(connections, connectionID)
+		broadcast(req.Context(), []byte("Leave member: "+name))
+		slog.Info("leave member", "connectionID", connectionID, "remoteAddr", req.RemoteAddr, "current", len(connections))
+	case "$default":
+		bs, err := io.ReadAll(req.Body)
+		if err != nil {
+			slog.Error("read body failed", "detail", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		slog.Info("default", "connectionID", connectionID, "remoteAddr", req.RemoteAddr, "body", string(bs))
+		if bytes.EqualFold(bs, []byte("exit")) {
+			if err := elevate.DeleteConnection(req.Context(), connectionID); err != nil {
+				slog.Error("delete connection failed", "detail", err)
+				w.WriteHeader(http.StatusInternalServerError)
+			}
+			return
+		}
+		name := connections[connectionID]
+		msg := fmt.Sprintf("[%s] %s", name, string(bs))
+		broadcast(req.Context(), []byte(msg))
+	case "hello":
+		var data map[string]interface{}
+		err := json.NewDecoder(req.Body).Decode(&data)
+		if err != nil {
+			slog.Error("unmarshal failed", "detail", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		name, ok := data["name"].(string)
+		if !ok {
+			return
+		}
+		slog.Info("hello", "connectionID", connectionID, "remoteAddr", req.RemoteAddr, "name", name)
+		msg := fmt.Sprintf("[%s] Hello!, my name is %s", connections[connectionID], name)
+		broadcast(req.Context(), []byte(msg))
+		connections[connectionID] = name
+	}
+}
+
+func broadcast(ctx context.Context, msg []byte) {
+	for k := range connections {
+		err := elevate.PostToConnection(ctx, k, msg)
+		if err != nil {
+			slog.Debug("post to failed", "detail", err, "connectionID", k)
+			if !elevate.ConnectionIsGone(err) {
+				slog.Error("post to failed", "detail", err, "connectionID", k)
+			} else {
+				slog.Warn("connection is gone", "connectionID", k)
+				delete(connections, k)
+			}
+		}
+	}
+}
+
 func main() {
 	slog.SetDefault(slog.New(
-		slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
 			Level: slog.LevelDebug,
 		}),
 	))
-	err := elevate.Run(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		bs, err := io.ReadAll(r.Body)
-		if err != nil {
-			w.WriteHeader(500)
-			w.Write([]byte(err.Error()))
-			return
-		}
-		slog.Info(
-			"received request",
-			slog.String("path", r.URL.Path),
-			slog.String("routeKey", r.Header.Get(elevate.HTTPHeaderRouteKey)),
-			slog.String("connectionID", r.Header.Get(elevate.HTTPHeaderConnectionID)),
-			slog.String("body", string(bs)),
-		)
-		if r.Header.Get(elevate.HTTPHeaderEventType) == "MESSAGE" {
-			client, err := elevate.NewManagementAPIClient(r.Context())
-			if err != nil {
-				w.WriteHeader(500)
-				w.Write([]byte(err.Error()))
-				return
-			}
-			if bytes.EqualFold(bs, []byte("exit")) {
-				_, err = client.DeleteConnection(r.Context(), &apigatewaymanagementapi.DeleteConnectionInput{
-					ConnectionId: aws.String(r.Header.Get(elevate.HTTPHeaderConnectionID)),
-				})
-				if err != nil {
-					slog.Error("delete connection failed", "detail", err, "connectionID", r.Header.Get(elevate.HTTPHeaderConnectionID))
-					w.WriteHeader(500)
-					w.Write([]byte(err.Error()))
-					return
-				}
-			}
-			_, err = client.PostToConnection(r.Context(), &apigatewaymanagementapi.PostToConnectionInput{
-				ConnectionId: aws.String(r.Header.Get(elevate.HTTPHeaderConnectionID)),
-				Data:         []byte("Echo! " + string(bs)),
-			})
-			if err != nil {
-				slog.Error("post failed", "detail", err, "connectionID", r.Header.Get(elevate.HTTPHeaderConnectionID))
-				w.WriteHeader(500)
-				w.Write([]byte(err.Error()))
-				return
-			}
-		}
-		w.WriteHeader(200)
-		if r.Header.Get(elevate.HTTPHeaderRouteKey) == "hello" {
-			w.Write([]byte("Hello, `" + r.Header.Get(elevate.HTTPHeaderConnectionID) + "`!"))
-		}
-	}))
+	err := elevate.RunWithOptions(
+		http.HandlerFunc(handler),
+		elevate.WithLocalAdress(":8080"),
+	)
 	if err != nil {
 		slog.Error("run failed", "detail", err)
 		os.Exit(1)
