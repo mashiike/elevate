@@ -374,7 +374,7 @@ func (h *WebsocketHTTPBridgeHandler) onConnect(originReq *http.Request, ws *webs
 }
 
 func (h *WebsocketHTTPBridgeHandler) onDisonnect(connectionID string) {
-	h.removeFromConnectionList(connectionID, websocket.CloseNormalClosure, "Connection Closed Normally")
+	defer h.removeFromConnectionList(connectionID, websocket.CloseNormalClosure, "Connection Closed Normally")
 	requsetID, err := generateID(11)
 	if err != nil {
 		requsetID = "00000000="
