@@ -21,6 +21,26 @@ var (
 	HTTPHeaderRouteKey     = "Elevate-Route-Key"
 )
 
+// RouteKey returns route key from *http.Request.
+func RouteKey(r *http.Request) string {
+	return r.Header.Get(HTTPHeaderRouteKey)
+}
+
+// ConnectionID returns connection id from *http.Request.
+func ConnectionID(r *http.Request) string {
+	return r.Header.Get(HTTPHeaderConnectionID)
+}
+
+// RequestID returns request id from *http.Request.
+func RequestID(r *http.Request) string {
+	return r.Header.Get(HTTPHeaderRequestID)
+}
+
+// EventType returns event type from *http.Request.
+func EventType(r *http.Request) string {
+	return r.Header.Get(HTTPHeaderEventType)
+}
+
 // NewRequest creates *net/http.Request from a Request.
 func NewRequest(event json.RawMessage) (*http.Request, error) {
 	return NewRequestWithContext(context.Background(), event)
