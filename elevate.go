@@ -233,7 +233,11 @@ func RunWithOptions(mux http.Handler, options ...Option) error {
 			runOpts.awsConfig = &cfg
 		}
 		handler := func(ctx context.Context, event json.RawMessage) (*events.APIGatewayProxyResponse, error) {
-			req, err := NewRequestWithContext(contextWithRunOptions(ctx, runOpts), event)
+			ctx = contextWithAWSConfig(ctx, *runOpts.awsConfig)
+			if runOpts.callbackURL != "" {
+				ctx = contextWithCallbackURL(ctx, runOpts.callbackURL)
+			}
+			req, err := NewRequestWithContext(ctx, event)
 			if err != nil {
 				return nil, err
 			}
@@ -264,13 +268,10 @@ func RunWithOptions(mux http.Handler, options ...Option) error {
 	bridge := NewWebsocketHTTPBridgeHandler(mux)
 	bridge.SetLogger(runOpts.logger)
 	bridge.SetVerbose(runOpts.varbose)
+	bridge.SetCallbackURL(runOpts.callbackURL)
 	srv := http.Server{
-		Addr: runOpts.address,
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			ctx := contextWithRunOptions(req.Context(), runOpts)
-			req = req.WithContext(ctx)
-			bridge.ServeHTTP(w, req)
-		}),
+		Addr:    runOpts.address,
+		Handler: bridge,
 	}
 	var wg sync.WaitGroup
 	wg.Add(1)

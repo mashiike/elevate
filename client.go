@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -12,13 +13,16 @@ import (
 )
 
 func NewManagementAPIClient(ctx context.Context) (*apigatewaymanagementapi.Client, error) {
-	runOptions := runOptionsFromContext(ctx)
+	callbackURL := callbackURLFromContext(ctx)
 	proxyCtx := ProxyContext(ctx)
 	if proxyCtx.APIID == "" {
 		// for local with dummy credentials
 		region := os.Getenv("AWS_REGION")
 		if region == "" {
 			region = "us-east-1"
+		}
+		if callbackURL == "" {
+			return nil, errors.New("elevate: callbackURL is empty")
 		}
 		cfg := aws.Config{
 			Region: region,
@@ -29,20 +33,21 @@ func NewManagementAPIClient(ctx context.Context) (*apigatewaymanagementapi.Clien
 			)),
 		}
 		return apigatewaymanagementapi.NewFromConfig(cfg, func(o *apigatewaymanagementapi.Options) {
-			o.BaseEndpoint = &runOptions.callbackURL
+			o.BaseEndpoint = &callbackURL
 		}), nil
 	}
-	if proxyCtx.DomainName == "" {
-		return nil, errors.New("elevate: DomainName is empty")
+	awsConfig := awsConfigFromContext(ctx)
+	if callbackURL == "" {
+		if strings.HasPrefix(proxyCtx.DomainName, proxyCtx.APIID) &&
+			strings.HasSuffix(proxyCtx.DomainName, "amazonaws.com") &&
+			proxyCtx.Stage != "" {
+			callbackURL = "https://" + proxyCtx.DomainName + "/" + proxyCtx.Stage
+		} else {
+			callbackURL = "https://" + proxyCtx.APIID + ".execute-api." + awsConfig.Region + ".amazonaws.com/" + proxyCtx.Stage
+		}
 	}
-	if proxyCtx.Stage == "" {
-		return nil, errors.New("elevate: Stage is empty")
-	}
-	if runOptions.awsConfig == nil {
-		return nil, errors.New("elevate: AWS Config is nil")
-	}
-	return apigatewaymanagementapi.NewFromConfig(*runOptions.awsConfig, func(o *apigatewaymanagementapi.Options) {
-		o.BaseEndpoint = aws.String("https://" + proxyCtx.DomainName + "/" + proxyCtx.Stage)
+	return apigatewaymanagementapi.NewFromConfig(awsConfig, func(o *apigatewaymanagementapi.Options) {
+		o.BaseEndpoint = aws.String(callbackURL)
 	}), nil
 }
 

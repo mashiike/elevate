@@ -6,7 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -37,6 +37,8 @@ func writeCloseFrame(ws *websocket.Conn, code int, reason string) error {
 
 type WebsocketHTTPBridgeHandler struct {
 	Handler                http.Handler
+	callbackURL            string
+	routeKeySelector       RouteKeySelector
 	mu                     sync.RWMutex
 	logger                 *slog.Logger
 	connections            map[string]*websocket.Conn
@@ -51,6 +53,8 @@ type WebsocketHTTPBridgeHandler struct {
 func NewWebsocketHTTPBridgeHandler(handler http.Handler) *WebsocketHTTPBridgeHandler {
 	h := &WebsocketHTTPBridgeHandler{
 		Handler:                handler,
+		routeKeySelector:       DefaultRouteKeySelector,
+		callbackURL:            "http://localhost",
 		logger:                 slog.Default(),
 		connections:            make(map[string]*websocket.Conn),
 		connectionReq:          make(map[string]*http.Request),
@@ -73,6 +77,14 @@ func (h *WebsocketHTTPBridgeHandler) SetLogger(logger *slog.Logger) {
 
 func (h *WebsocketHTTPBridgeHandler) SetVerbose(verbose bool) {
 	h.verbose = verbose
+}
+
+func (h *WebsocketHTTPBridgeHandler) SetCallbackURL(callbackURL string) {
+	h.callbackURL = callbackURL
+}
+
+func (h *WebsocketHTTPBridgeHandler) SetRouteKeySelector(selector RouteKeySelector) {
+	h.routeKeySelector = selector
 }
 
 func (h *WebsocketHTTPBridgeHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
@@ -102,10 +114,21 @@ func (h *WebsocketHTTPBridgeHandler) serveWebsocket(w http.ResponseWriter, req *
 		}
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
-			if err != io.EOF {
-				h.logger.ErrorContext(req.Context(), "failed to receive message", "detail", err)
-				h.removeFromConnectionList(connectionID, websocket.CloseInternalServerErr, "Cannot Receive Message")
+			var closeErr *websocket.CloseError
+			if err == io.EOF {
+				h.logger.Debug("receive EOF")
+				h.removeFromConnectionList(connectionID, 0, "")
 			}
+			if errors.As(err, &closeErr) {
+				h.removeFromConnectionList(connectionID, 0, "")
+				h.logger.Debug("receive close frame", "code", closeErr.Code, "reason", closeErr.Text)
+				if closeErr.Code == websocket.CloseNormalClosure {
+					return
+				}
+				h.logger.Warn("receive close frame", "code", closeErr.Code, "reason", closeErr.Text, "connection_id", connectionID)
+			}
+			h.logger.ErrorContext(req.Context(), "failed to receive message", "detail", err)
+			h.removeFromConnectionList(connectionID, websocket.CloseInternalServerErr, "Cannot Receive Message")
 			return
 		}
 		if err := h.onReceiveMessage(connectionID, conn, msg); err != nil {
@@ -236,9 +259,7 @@ func (h *WebsocketHTTPBridgeHandler) addToConnectionList(connectionID string, co
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.connections[connectionID] = ws
-	runOptions := runOptionsFromContext(req.Context())
-	ctx := contextWithRunOptions(context.TODO(), runOptions)
-	h.connectionReq[connectionID] = req.Clone(ctx)
+	h.connectionReq[connectionID] = req.Clone(context.TODO())
 	h.connectionConnectedAt[connectionID] = connectedAt
 	h.connectionLastActiveAt[connectionID] = connectedAt
 }
@@ -251,8 +272,10 @@ func (h *WebsocketHTTPBridgeHandler) removeFromConnectionList(connectionID strin
 		return false
 	}
 	delete(h.connections, connectionID)
-	if err := writeCloseFrame(conn, code, reason); err != nil {
-		h.logger.Error("failed to write close frame", "detail", err, "connection_id", connectionID)
+	if code > 0 {
+		if err := writeCloseFrame(conn, code, reason); err != nil {
+			h.logger.Error("failed to write close frame", "detail", err, "connection_id", connectionID)
+		}
 	}
 	return true
 }
@@ -405,8 +428,7 @@ func (h *WebsocketHTTPBridgeHandler) onDisonnect(connectionID string) {
 		MessageDirection: "IN",
 	}
 	ctx := contextWithRequestContext(context.Background(), proxyCtx)
-	runOptions := runOptionsFromContext(originReq.Context())
-	ctx = contextWithRunOptions(ctx, runOptions)
+	ctx = contextWithCallbackURL(ctx, h.callbackURL)
 	req, err := h.newBridgeRequest(
 		ctx,
 		connectionID,
@@ -425,9 +447,6 @@ func (h *WebsocketHTTPBridgeHandler) onDisonnect(connectionID string) {
 	req.Header.Set(HTTPHeaderRouteKey, "$disconnect")
 	respWriter := NewResponseWriter()
 	h.Handler.ServeHTTP(respWriter, req)
-	if respWriter.statusCode != http.StatusOK {
-		h.logger.ErrorContext(ctx, "failed bridge handler", "status", respWriter.statusCode)
-	}
 	if h.verbose {
 		h.logger.Info(
 			"disconnected",
@@ -446,8 +465,7 @@ func (h *WebsocketHTTPBridgeHandler) onReceiveMessage(connectionID string, ws *w
 		return err
 	}
 	connectedAt, _, originReq := h.getConnectionInfo(connectionID)
-	runOptions := runOptionsFromContext(originReq.Context())
-	routeKey, err := runOptions.routeKeySelector(msg)
+	routeKey, err := h.routeKeySelector(msg)
 	if err != nil {
 		if h.verbose {
 			h.logger.Warn("failed to select route key, fallback to $default", "detail", err, "connection_id", connectionID)
@@ -476,7 +494,7 @@ func (h *WebsocketHTTPBridgeHandler) onReceiveMessage(connectionID string, ws *w
 		MessageDirection: "IN",
 	}
 	ctx := contextWithRequestContext(context.Background(), proxyCtx)
-	ctx = contextWithRunOptions(ctx, runOptions)
+	ctx = contextWithCallbackURL(ctx, h.callbackURL)
 	req, err := h.newBridgeRequest(
 		ctx,
 		connectionID,
@@ -504,10 +522,6 @@ func (h *WebsocketHTTPBridgeHandler) onReceiveMessage(connectionID string, ws *w
 	if err := ws.WriteMessage(messageType, respWriter.Bytes()); err != nil {
 		h.removeFromConnectionList(connectionID, websocket.CloseInternalServerErr, "failed to send message")
 		return err
-	}
-	if respWriter.statusCode != http.StatusOK {
-		h.removeFromConnectionList(connectionID, websocket.CloseInternalServerErr, "failed bridge handler")
-		return fmt.Errorf("failed bridge handler: %d", respWriter.statusCode)
 	}
 	h.markActiveAt(connectionID)
 	return nil
