@@ -14,7 +14,7 @@ import (
 
 func NewManagementAPIClient(ctx context.Context) (*apigatewaymanagementapi.Client, error) {
 	callbackURL := callbackURLFromContext(ctx)
-	proxyCtx := ProxyContext(ctx)
+	proxyCtx := ProxyRequestContext(ctx)
 	if proxyCtx.APIID == "" {
 		// for local with dummy credentials
 		region := os.Getenv("AWS_REGION")

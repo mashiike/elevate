@@ -27,7 +27,7 @@ func contextWithCallbackURL(ctx context.Context, url string) context.Context {
 	return context.WithValue(ctx, callbackURLContextKey, url)
 }
 
-func ProxyContext(ctx context.Context) events.APIGatewayWebsocketProxyRequestContext {
+func ProxyRequestContext(ctx context.Context) events.APIGatewayWebsocketProxyRequestContext {
 	if ctx == nil {
 		return events.APIGatewayWebsocketProxyRequestContext{}
 	}

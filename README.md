@@ -70,6 +70,32 @@ func main() {
     - default address `ws://localhost:8080/` , you can change `elevate.WithLocalAddress(address)` option.
     - default route key selector emulates `$request.body.action` , you can change `elevate.WithRouteKeySelector(selector)` option.
 
+## `@connections API` 
+
+`elevate.NewManagementAPIClient()` returns `github.com/aws/aws-sdk-go-v2/service/apigatewaymanagementapi/apigatewaymanagementapiiface.Client`.
+
+you can use `@connections API` with this client.
+
+and elevate provides suger methods.
+
+- `elevate.PostToConnection(ctx context.Context, connectionID string, data []byte) error`
+- `elevate.DeleteConnection(ctx context.Context, connectionID string) error`
+- `elevate.GetConnection(ctx context.Context, connectionID string) (*apigatewaymanagementapi.GetConnectionOutput, error)`
+
+if connection not found, this client return err `GoneException`.
+suger methods of check this error and return `true` if connection is not found.
+
+## ConnectionID and RouteKey, API Gateway Proxy Request Context
+
+In handler, you can get `ConnectionID` and `RouteKey` from `*http.Request`.
+
+```go
+connectionID := elevate.ConnectionID(req)
+routeKey := elevate.RouteKey(req)
+```
+
+this is suger interface of `elevate.ProxyRequestContext(req).ConnectionID` and `elevate.ProxyRequestContext(req).RouteKey`.
+
 ## License
 
 MIT

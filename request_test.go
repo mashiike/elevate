@@ -69,7 +69,7 @@ func TestNewRequest__Connect(t *testing.T) {
 	if string(body) != "" {
 		t.Errorf("req.Body = %s; want empty", string(body))
 	}
-	proxyCtx := elevate.ProxyContext(req.Context())
+	proxyCtx := elevate.ProxyRequestContext(req.Context())
 	if proxyCtx.ConnectionID != "ZZZZZZZZZZZZZZZ=" {
 		t.Errorf("proxyCtx.ConnectionID = %s; want ZZZZZZZZZZZZZZZ=", proxyCtx.ConnectionID)
 	}
@@ -127,7 +127,7 @@ func TestNewRequest__Disconnect(t *testing.T) {
 	if string(body) != "" {
 		t.Errorf("req.Body = %s; want empty", string(body))
 	}
-	proxyCtx := elevate.ProxyContext(req.Context())
+	proxyCtx := elevate.ProxyRequestContext(req.Context())
 	if proxyCtx.ConnectionID != "ZZZZZZZZZZZZZZZ=" {
 		t.Errorf("proxyCtx.ConnectionID = %s; want ZZZZZZZZZZZZZZZ=", proxyCtx.ConnectionID)
 	}
@@ -185,7 +185,7 @@ func TestNewRequest__Default(t *testing.T) {
 	if string(body) != `{"abc":"def"}` {
 		t.Errorf(`req.Body = %s; want {"abc":"def"}`, string(body))
 	}
-	proxyCtx := elevate.ProxyContext(req.Context())
+	proxyCtx := elevate.ProxyRequestContext(req.Context())
 	if proxyCtx.ConnectionID != "ZZZZZZZZZZZZZZZ=" {
 		t.Errorf("proxyCtx.ConnectionID = %s; want ZZZZZZZZZZZZZZZ=", proxyCtx.ConnectionID)
 	}
@@ -243,7 +243,7 @@ func TestNewRequest__RouteHello(t *testing.T) {
 	if string(body) != `{"action":"hello","hoge":fuga"}` {
 		t.Errorf(`req.Body = %s; want {"action":"hello","hoge":fuga"}`, string(body))
 	}
-	proxyCtx := elevate.ProxyContext(req.Context())
+	proxyCtx := elevate.ProxyRequestContext(req.Context())
 	if proxyCtx.ConnectionID != "ZZZZZZZZZZZZZZZ=" {
 		t.Errorf("proxyCtx.ConnectionID = %s; want ZZZZZZZZZZZZZZZ=", proxyCtx.ConnectionID)
 	}
