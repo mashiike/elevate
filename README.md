@@ -64,10 +64,10 @@ func main() {
 
 `elevate.Run(http.Handler)` and `elevate.RunWithOptions(http.Handler, ...elevate.Options)` works as below.
 
-- if running on AWS Lambda(defined `AWS_LAMBDA_FUNCTION_NAME` environment variable), run as AWS Lambda handler.
+- if running on AWS Lambda(defined `AWS_LAMBDA_FUNCTION_NAME` or `AWS_EXECUTION_ENV` environment variable)
     - Call `lambda.StartWithOptions()`
 - otherwise, run as net/http server with websocket handler.
-    - default address `ws://localhost:8080/` , you can change `elevate.WithListenAddress(address)` option.
+    - default address `ws://localhost:8080/` , you can change `elevate.WithLocalAddress(address)` option.
     - default route key selector emulates `$request.body.action` , you can change `elevate.WithRouteKeySelector(selector)` option.
 
 ## License
