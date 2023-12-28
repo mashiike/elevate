@@ -94,17 +94,12 @@ func (h *WebsocketHTTPBridgeHandler) ServeHTTP(w http.ResponseWriter, req *http.
 
 func (h *WebsocketHTTPBridgeHandler) serveWebsocket(w http.ResponseWriter, req *http.Request) {
 	h.logger.Debug("start serve websocket", "method", req.Method, "path", req.URL.Path)
-	conn, err := h.Upgrade(w, req, nil)
-	if err != nil {
-		h.logger.ErrorContext(req.Context(), "failed to upgrade", "detail", err)
-		return
-	}
-	defer conn.Close()
-	connectionID, err := h.onConnect(req, conn)
+	connectionID, conn, err := h.onConnect(w, req)
 	if err != nil {
 		h.logger.ErrorContext(req.Context(), "failed to connect", "detail", err)
 		return
 	}
+	defer conn.Close()
 	defer h.onDisonnect(connectionID)
 	for {
 		if err := conn.SetReadDeadline(time.Now().Add(10 * time.Minute)); err != nil {
@@ -332,14 +327,14 @@ func (h *WebsocketHTTPBridgeHandler) currentConnections() int {
 	return len(h.connections)
 }
 
-func (h *WebsocketHTTPBridgeHandler) onConnect(originReq *http.Request, ws *websocket.Conn) (string, error) {
+func (h *WebsocketHTTPBridgeHandler) onConnect(w http.ResponseWriter, originReq *http.Request) (string, *websocket.Conn, error) {
 	now := time.Now()
 	connectionID, err := generateID(11)
 	if err != nil {
-		writeCloseFrame(ws, websocket.CloseInternalServerErr, "failed to generate connection id")
-		return "", err
+		w.WriteHeader(http.StatusInternalServerError)
+		return "", nil, err
 	}
-	h.logger.Debug("generate connection id", "connection_id", connectionID, "remote_addr", ws.RemoteAddr().String())
+	h.logger.Debug("generate connection id", "connection_id", connectionID, "remote_addr", originReq.RemoteAddr)
 	req, err := h.newBridgeRequest(
 		originReq.Context(),
 		connectionID,
@@ -349,13 +344,13 @@ func (h *WebsocketHTTPBridgeHandler) onConnect(originReq *http.Request, ws *webs
 		bytes.NewReader([]byte{}),
 	)
 	if err != nil {
-		writeCloseFrame(ws, websocket.CloseInternalServerErr, "failed to create bridge request")
-		return "", err
+		w.WriteHeader(http.StatusInternalServerError)
+		return "", nil, err
 	}
 	requsetID, err := generateID(11)
 	if err != nil {
-		writeCloseFrame(ws, websocket.CloseInternalServerErr, "failed to generate request id")
-		return "", err
+		w.WriteHeader(http.StatusInternalServerError)
+		return "", nil, err
 	}
 	req.Header.Set(HTTPHeaderConnectionID, connectionID)
 	req.Header.Set(HTTPHeaderRequestID, requsetID)
@@ -369,7 +364,7 @@ func (h *WebsocketHTTPBridgeHandler) onConnect(originReq *http.Request, ws *webs
 		RouteKey:          "$connect",
 		DomainName:        originReq.Host,
 		Identity: events.APIGatewayRequestIdentity{
-			SourceIP: ws.RemoteAddr().String(),
+			SourceIP: originReq.RemoteAddr,
 		},
 		ConnectedAt:      int64(now.UnixNano() / int64(time.Millisecond)),
 		RequestTime:      now.Format(time.Layout),
@@ -377,25 +372,31 @@ func (h *WebsocketHTTPBridgeHandler) onConnect(originReq *http.Request, ws *webs
 		MessageDirection: "IN",
 	}
 	req = req.WithContext(contextWithRequestContext(req.Context(), proxyCtx))
-	h.logger.Debug("prepare connect bridge request", "connection_id", connectionID, "remote_addr", ws.RemoteAddr().String())
+	h.logger.Debug("prepare connect bridge request", "connection_id", connectionID, "remote_addr", originReq.RemoteAddr)
 	respWriter := NewResponseWriter()
 	h.Handler.ServeHTTP(respWriter, req)
 	if respWriter.statusCode != http.StatusOK {
 		h.logger.Debug("failed bridge handler", "status", respWriter.statusCode)
-		writeCloseFrame(ws, websocket.CloseInternalServerErr, "failed bridge handler")
-		return "", err
+		w.WriteHeader(respWriter.statusCode)
+		return "", nil, errors.New("failed bridge handler")
 	}
-	h.addToConnectionList(connectionID, now, originReq, ws)
+	conn, err := h.Upgrade(w, originReq, nil)
+	if err != nil {
+		h.logger.ErrorContext(req.Context(), "failed to upgrade", "detail", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return "", nil, err
+	}
+	h.addToConnectionList(connectionID, now, originReq, conn)
 	h.logger.Debug("connected", "connection_id", connectionID)
 	if h.verbose {
 		h.logger.Info("connected",
 			"connection_id", connectionID,
-			"remote_addr", ws.RemoteAddr().String(),
+			"remote_addr", conn.RemoteAddr().String(),
 			"host", originReq.Host,
 			"current_connections", h.currentConnections(),
 		)
 	}
-	return connectionID, nil
+	return connectionID, conn, err
 }
 
 func (h *WebsocketHTTPBridgeHandler) onDisonnect(connectionID string) {
