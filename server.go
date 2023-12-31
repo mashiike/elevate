@@ -116,7 +116,7 @@ func (h *WebsocketHTTPBridgeHandler) serveWebsocket(w http.ResponseWriter, req *
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
 			var closeErr *websocket.CloseError
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				h.debugVerbose("receive EOF")
 				h.removeFromConnectionList(connectionID, 0, "")
 			}
