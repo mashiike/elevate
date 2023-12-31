@@ -352,6 +352,11 @@ func (h *WebsocketHTTPBridgeHandler) onConnect(w http.ResponseWriter, originReq 
 		w.WriteHeader(http.StatusInternalServerError)
 		return "", nil, err
 	}
+	for k, v := range originReq.Header {
+		for _, vv := range v {
+			req.Header.Add(k, vv)
+		}
+	}
 	req.Header.Set(HTTPHeaderConnectionID, connectionID)
 	req.Header.Set(HTTPHeaderRequestID, requsetID)
 	req.Header.Set(HTTPHeaderEventType, "CONNECT")
