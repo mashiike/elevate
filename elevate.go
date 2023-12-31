@@ -233,6 +233,9 @@ func RunWithOptions(mux http.Handler, options ...Option) error {
 			runOpts.awsConfig = &cfg
 		}
 		handler := func(ctx context.Context, event json.RawMessage) (*events.APIGatewayProxyResponse, error) {
+			if runOpts.varbose {
+				runOpts.logger.DebugContext(ctx, "lambda invoked", "event", string(event))
+			}
 			ctx = contextWithAWSConfig(ctx, *runOpts.awsConfig)
 			if runOpts.callbackURL != "" {
 				ctx = contextWithCallbackURL(ctx, runOpts.callbackURL)

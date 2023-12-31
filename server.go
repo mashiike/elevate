@@ -79,6 +79,12 @@ func (h *WebsocketHTTPBridgeHandler) SetVerbose(verbose bool) {
 	h.verbose = verbose
 }
 
+func (h *WebsocketHTTPBridgeHandler) debugVerbose(msg string, args ...any) {
+	if h.verbose {
+		h.logger.Debug(msg, args...)
+	}
+}
+
 func (h *WebsocketHTTPBridgeHandler) SetCallbackURL(callbackURL string) {
 	h.callbackURL = callbackURL
 }
@@ -88,12 +94,12 @@ func (h *WebsocketHTTPBridgeHandler) SetRouteKeySelector(selector RouteKeySelect
 }
 
 func (h *WebsocketHTTPBridgeHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	h.logger.Debug("receive request", "method", req.Method, "path", req.URL.Path)
+	h.debugVerbose("receive request", "method", req.Method, "path", req.URL.Path)
 	h.router.ServeHTTP(w, req)
 }
 
 func (h *WebsocketHTTPBridgeHandler) serveWebsocket(w http.ResponseWriter, req *http.Request) {
-	h.logger.Debug("start serve websocket", "method", req.Method, "path", req.URL.Path)
+	h.debugVerbose("start serve websocket", "method", req.Method, "path", req.URL.Path)
 	connectionID, conn, err := h.onConnect(w, req)
 	if err != nil {
 		h.logger.ErrorContext(req.Context(), "failed to connect", "detail", err)
@@ -109,14 +115,16 @@ func (h *WebsocketHTTPBridgeHandler) serveWebsocket(w http.ResponseWriter, req *
 		}
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
-			var closeErr *websocket.CloseError
-			if err == io.EOF {
-				h.logger.Debug("receive EOF")
+
+			if errors.Is(err, io.EOF) {
+				h.debugVerbose("receive EOF")
 				h.removeFromConnectionList(connectionID, 0, "")
 			}
+
+			var closeErr *websocket.CloseError
 			if errors.As(err, &closeErr) {
 				h.removeFromConnectionList(connectionID, 0, "")
-				h.logger.Debug("receive close frame", "code", closeErr.Code, "reason", closeErr.Text)
+				h.debugVerbose("receive close frame", "code", closeErr.Code, "reason", closeErr.Text)
 				if closeErr.Code == websocket.CloseNormalClosure {
 					return
 				}
@@ -334,7 +342,7 @@ func (h *WebsocketHTTPBridgeHandler) onConnect(w http.ResponseWriter, originReq 
 		w.WriteHeader(http.StatusInternalServerError)
 		return "", nil, err
 	}
-	h.logger.Debug("generate connection id", "connection_id", connectionID, "remote_addr", originReq.RemoteAddr)
+	h.debugVerbose("generate connection id", "connection_id", connectionID, "remote_addr", originReq.RemoteAddr)
 	req, err := h.newBridgeRequest(
 		originReq.Context(),
 		connectionID,
@@ -351,6 +359,11 @@ func (h *WebsocketHTTPBridgeHandler) onConnect(w http.ResponseWriter, originReq 
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		return "", nil, err
+	}
+	for k, v := range originReq.Header {
+		for _, vv := range v {
+			req.Header.Add(k, vv)
+		}
 	}
 	req.Header.Set(HTTPHeaderConnectionID, connectionID)
 	req.Header.Set(HTTPHeaderRequestID, requsetID)
@@ -371,23 +384,28 @@ func (h *WebsocketHTTPBridgeHandler) onConnect(w http.ResponseWriter, originReq 
 		RequestTimeEpoch: int64(now.UnixNano() / int64(time.Millisecond)),
 		MessageDirection: "IN",
 	}
-	req = req.WithContext(contextWithRequestContext(req.Context(), proxyCtx))
-	h.logger.Debug("prepare connect bridge request", "connection_id", connectionID, "remote_addr", originReq.RemoteAddr)
+	ctx := contextWithRequestContext(req.Context(), proxyCtx)
+	req = req.WithContext(ctx)
+	h.debugVerbose("prepare connect bridge request", "connection_id", connectionID, "remote_addr", originReq.RemoteAddr)
+
 	respWriter := NewResponseWriter()
 	h.Handler.ServeHTTP(respWriter, req)
+
 	if respWriter.statusCode != http.StatusOK {
-		h.logger.Debug("failed bridge handler", "status", respWriter.statusCode)
+		h.debugVerbose("failed bridge handler", "status", respWriter.statusCode)
 		w.WriteHeader(respWriter.statusCode)
+
 		return "", nil, errors.New("failed bridge handler")
 	}
 	conn, err := h.Upgrade(w, originReq, nil)
 	if err != nil {
 		h.logger.ErrorContext(req.Context(), "failed to upgrade", "detail", err)
 		w.WriteHeader(http.StatusInternalServerError)
+
 		return "", nil, err
 	}
 	h.addToConnectionList(connectionID, now, originReq, conn)
-	h.logger.Debug("connected", "connection_id", connectionID)
+	h.debugVerbose("connected", "connection_id", connectionID)
 	if h.verbose {
 		h.logger.Info("connected",
 			"connection_id", connectionID,

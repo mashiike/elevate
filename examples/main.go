@@ -91,6 +91,7 @@ func main() {
 	err := elevate.RunWithOptions(
 		http.HandlerFunc(handler),
 		elevate.WithLocalAdress(":8080"),
+		elevate.WithVerbose(),
 	)
 	if err != nil {
 		slog.Error("run failed", "detail", err)
