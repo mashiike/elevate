@@ -1,0 +1,22 @@
+linters-settings:
+  govet:
+    check-shadowing: true
+  golint:
+    min-confidence: 0.8
+
+linters:
+  enable-all: true
+  disable:
+    - gochecknoinits
+    - gochecknoglobals
+
+issues:
+  exclude-rules:
+    - linters:
+        - govet
+      text: "composite literal uses unkeyed fields"
+
+run:
+  deadline: 5m
+  skip-files:
+    - ".*_test.go"
