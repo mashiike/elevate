@@ -115,11 +115,13 @@ func (h *WebsocketHTTPBridgeHandler) serveWebsocket(w http.ResponseWriter, req *
 		}
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
-			var closeErr *websocket.CloseError
+
 			if errors.Is(err, io.EOF) {
 				h.debugVerbose("receive EOF")
 				h.removeFromConnectionList(connectionID, 0, "")
 			}
+
+			var closeErr *websocket.CloseError
 			if errors.As(err, &closeErr) {
 				h.removeFromConnectionList(connectionID, 0, "")
 				h.debugVerbose("receive close frame", "code", closeErr.Code, "reason", closeErr.Text)
@@ -382,19 +384,24 @@ func (h *WebsocketHTTPBridgeHandler) onConnect(w http.ResponseWriter, originReq 
 		RequestTimeEpoch: int64(now.UnixNano() / int64(time.Millisecond)),
 		MessageDirection: "IN",
 	}
-	req = req.WithContext(contextWithRequestContext(req.Context(), proxyCtx))
+	ctx := contextWithRequestContext(req.Context(), proxyCtx)
+	req = req.WithContext(ctx)
 	h.debugVerbose("prepare connect bridge request", "connection_id", connectionID, "remote_addr", originReq.RemoteAddr)
+
 	respWriter := NewResponseWriter()
 	h.Handler.ServeHTTP(respWriter, req)
+
 	if respWriter.statusCode != http.StatusOK {
 		h.debugVerbose("failed bridge handler", "status", respWriter.statusCode)
 		w.WriteHeader(respWriter.statusCode)
+
 		return "", nil, errors.New("failed bridge handler")
 	}
 	conn, err := h.Upgrade(w, originReq, nil)
 	if err != nil {
 		h.logger.ErrorContext(req.Context(), "failed to upgrade", "detail", err)
 		w.WriteHeader(http.StatusInternalServerError)
+
 		return "", nil, err
 	}
 	h.addToConnectionList(connectionID, now, originReq, conn)
